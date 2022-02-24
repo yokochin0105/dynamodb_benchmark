@@ -29,9 +29,9 @@ Options:
 -id <id>             (Required) id field value in the table
 -condition <max-age> Conditinal check value of max age on updating "age" field in the table
                      Defaults to 0 (No Conditional Check); Must be more than 0
--c connections       Number of parallel simultaneous Kinesis session
+-c connections       Number of parallel simultaneous DynamoDB session
                      Defaults to 1; Must be more than 0
--n num-calls         Run for exactly this number of calls by each Kinesis session
+-n num-calls         Run for exactly this number of calls by each DynamoDB session
                      Defaults to 1; Must be more than 0
 -r retry-num         Number fo Retry in each message send
                      Default to 1; Must be more than 0
@@ -234,8 +234,8 @@ func main() {
 	flag.StringVar(&endpointUrl, "endpoint-url", "", "The URL to send the API request to")
 	flag.StringVar(&id, "id", "", "(Required) id field value in the table")
 	flag.IntVar(&condition, "condition", 0, "Conditinal check value of max age on updating age field")
-	flag.IntVar(&connections, "c", 1, "Number of parallel simultaneous Kinesis session")
-	flag.IntVar(&numCalls, "n", 1, "Run for exactly this number of calls by each Kinesis session")
+	flag.IntVar(&connections, "c", 1, "Number of parallel simultaneous DynamoDB session")
+	flag.IntVar(&numCalls, "n", 1, "Run for exactly this number of calls by each DynamoDB session")
 	flag.IntVar(&retryNum, "r", 1, "Number fo Retry in each message send")
 	flag.BoolVar(&verbose, "verbose", false, "Verbose option")
 	flag.Usage = usage
