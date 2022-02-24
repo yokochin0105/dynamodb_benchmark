@@ -1,2 +1,9 @@
-# dynamodb_benchmark
-dynamodb benchmark sample
+
+
+
+# For Developer
+
+```bash
+go mod init dynamodb
+go mod tidy
+```
