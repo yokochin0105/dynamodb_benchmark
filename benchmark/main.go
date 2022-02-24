@@ -150,9 +150,6 @@ func (c *DynamoDBBenchmark) startWriteWorker(id int, wg *sync.WaitGroup, success
 		}
 	}
 	for i := 1; i <= c.NumCalls; i++ {
-		//if c.Verbose {
-		//	fmt.Printf("[Verbose] Mssage: PartitionKey %s Data %s\n", c.PartitionKey, message)
-		//}
 		err := retry(c.RetryNum, 2*time.Second, func() (err error) {
 			dresp, derr := db.UpdateItem(param)
 			if c.Verbose {
