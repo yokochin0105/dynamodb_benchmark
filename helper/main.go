@@ -35,6 +35,7 @@ Options:
 type Item struct {
 	Id  string `json:"id"`
 	Age int64  `json:"age"`
+	Ver int64  `json:"ver"`
 }
 
 func getDynamoDBClient(endpointUrl string) *dynamodb.DynamoDB {
@@ -65,15 +66,19 @@ func CreateTable(db dynamodbiface.DynamoDBAPI, tableName *string) error {
 		},
 	}
 
-	provisionedThroughput := &dynamodb.ProvisionedThroughput{
-		ReadCapacityUnits:  aws.Int64(10),
-		WriteCapacityUnits: aws.Int64(10),
-	}
+	billingMode := aws.String(dynamodb.BillingModePayPerRequest)
+
+
+	// provisionedThroughput := &dynamodb.ProvisionedThroughput{
+	// 	ReadCapacityUnits:  aws.Int64(10),
+	// 	WriteCapacityUnits: aws.Int64(10),
+	// }
 
 	_, err := db.CreateTable(&dynamodb.CreateTableInput{
 		AttributeDefinitions:  attributeDefinitions,
 		KeySchema:             keySchema,
-		ProvisionedThroughput: provisionedThroughput,
+        BillingMode:           billingMode,
+		// ProvisionedThroughput: provisionedThroughput,
 		TableName:             tableName,
 	})
 	return err
@@ -83,7 +88,8 @@ func CreateItem(db dynamodbiface.DynamoDBAPI, tableName *string, id *string) err
 
 	item := Item{
 		Id:  *id,
-		Age: 1,
+		Age: 200,
+		Ver: 0,
 	}
 	av, err := dynamodbattribute.MarshalMap(item)
 	if err != nil {
@@ -132,7 +138,7 @@ func GetItem(db dynamodbiface.DynamoDBAPI, tableName *string, id *string) error 
 	if err != nil {
 		panic(fmt.Sprintf("Failed to unmarshal Record, %v", err))
 	}
-	fmt.Printf("Found item: id=%s, age=%d\n", item.Id, item.Age)
+	fmt.Printf("Found item: id=%s, age=%d, ver=%d\n", item.Id, item.Age, item.Ver)
 	return err
 }
 

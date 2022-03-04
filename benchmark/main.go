@@ -57,6 +57,7 @@ type DynamoDBBenchmark struct {
 type Item struct {
 	Id  string `json:"id"`
 	Age int64  `json:"age"`
+	Ver int64  `json:"ver"`
 }
 
 func retry(attempts int, sleep time.Duration, f func() error) (err error) {
@@ -129,27 +130,33 @@ func (c *DynamoDBBenchmark) startWriteWorker(id int, wg *sync.WaitGroup, success
 				S: aws.String(c.Id),
 			},
 		},
-		UpdateExpression: aws.String("set age = age + :age_increment_value"),
+		UpdateExpression: aws.String("set age = age - :age_decrement_value, ver = ver + :ver_increment_value"),
 		ReturnValues:     aws.String("ALL_NEW"),
 	}
 	if c.Condition > 0 {
-		param.ConditionExpression = aws.String("age < :age_max_value")
+		param.ConditionExpression = aws.String("age >= :age_minimum_value")
 		param.ExpressionAttributeValues = map[string]*dynamodb.AttributeValue{
-			":age_increment_value": {
+			":age_decrement_value": {
 				N: aws.String("1"),
 			},
-			":age_max_value": {
+			":ver_increment_value": {
+				N: aws.String("1"),
+			},
+			":age_minimum_value": {
 				N: aws.String(strconv.Itoa(c.Condition)),
 			},
 		}
 	} else {
 		param.ExpressionAttributeValues = map[string]*dynamodb.AttributeValue{
-			":age_increment_value": {
+			":age_decrement_value": {
 				N: aws.String("1"),
 			},
 		}
 	}
 	for i := 1; i <= c.NumCalls; i++ {
+		//if c.Verbose {
+		//	fmt.Printf("[Verbose] Mssage: PartitionKey %s Data %s\n", c.PartitionKey, message)
+		//}
 		err := retry(c.RetryNum, 2*time.Second, func() (err error) {
 			dresp, derr := db.UpdateItem(param)
 			if c.Verbose {
@@ -159,7 +166,7 @@ func (c *DynamoDBBenchmark) startWriteWorker(id int, wg *sync.WaitGroup, success
 					fmt.Printf("Got error unmarshalling: %s", derr)
 					return derr
 				}
-				fmt.Printf("[Verbose] DynamoDB UpdateImte Response: id %s age %d\n", item.Id, item.Age)
+				fmt.Printf("[Verbose] DynamoDB UpdateImte Response: id %s age %d ver %d\n", item.Id, item.Age, item.Ver)
 			}
 			return derr
 		})
@@ -231,8 +238,8 @@ func main() {
 	flag.StringVar(&endpointUrl, "endpoint-url", "", "The URL to send the API request to")
 	flag.StringVar(&id, "id", "", "(Required) id field value in the table")
 	flag.IntVar(&condition, "condition", 0, "Conditinal check value of max age on updating age field")
-	flag.IntVar(&connections, "c", 1, "Number of parallel simultaneous DynamoDB session")
-	flag.IntVar(&numCalls, "n", 1, "Run for exactly this number of calls by each DynamoDB session")
+	flag.IntVar(&connections, "c", 1, "Number of parallel simultaneous Kinesis session")
+	flag.IntVar(&numCalls, "n", 1, "Run for exactly this number of calls by each Kinesis session")
 	flag.IntVar(&retryNum, "r", 1, "Number fo Retry in each message send")
 	flag.BoolVar(&verbose, "verbose", false, "Verbose option")
 	flag.Usage = usage
