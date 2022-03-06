@@ -23,25 +23,23 @@ func usage() {
 var usageText = `auto_increment [options...]
 
 Options:
--a <action>            (Required) An action to execute
-                       Defaults to "read"; Must be either "read" or "write"
--table <table>         (Required) DynamoDB table name
--id <id>               (Required) id field value in the table
--condition <max-age>   Conditinal check value of max age on updating "age" field in the table
-					   Defaults to 0 (No Conditional Check); Must be more than 0
--transaction <max-ver> Transaction write value of max ver on updating "ver" field in the table
-                       Defaults to 0 (No Transaction Write); Must be more than 0
--c connections         Number of parallel simultaneous Kinesis session
-                       Defaults to 1; Must be more than 0
--n num-calls           Run for exactly this number of calls by each Kinesis session
-                       Defaults to 1; Must be more than 0
--r retry-num           Number fo Retry in each message send
-                       Default to 1; Must be more than 0
--endpoint-url <url>    DynamoDB Endpoint URL to send the API request to.
-                       Defaults to "", which mean the AWS SDK automatically determines the URL
-                       For example, give "http://localhost:8000" if it's local dynamodb with exposed port 8000
--verbose               Verbose option
--h                     help message
+-a <action>          (Required) An action to execute
+                     Defaults to "read"; Must be either "read" or "write"
+-table <table>       (Required) DynamoDB table name
+-id <id>             (Required) id field value in the table
+-condition <max-age> Conditinal check value of max age on updating "age" field in the table
+                     Defaults to 0 (No Conditional Check); Must be more than 0
+-c connections       Number of parallel simultaneous DynamoDB session
+                     Defaults to 1; Must be more than 0
+-n num-calls         Run for exactly this number of calls by each DynamoDB session
+                     Defaults to 1; Must be more than 0
+-r retry-num         Number fo Retry in each message send
+                     Default to 1; Must be more than 0
+-endpoint-url <url>  DynamoDB Endpoint URL to send the API request to.
+                     Defaults to "", which mean the AWS SDK automatically determines the URL
+                     For example, give "http://localhost:8000" if it's local dynamodb with exposed port 8000
+-verbose             Verbose option
+-h                   help message
 `
 
 type DynamoDBBenchmark struct {
