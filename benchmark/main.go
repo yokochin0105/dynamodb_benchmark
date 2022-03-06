@@ -23,23 +23,25 @@ func usage() {
 var usageText = `auto_increment [options...]
 
 Options:
--a <action>          (Required) An action to execute
-                     Defaults to "read"; Must be either "read" or "write"
--table <table>       (Required) DynamoDB table name
--id <id>             (Required) id field value in the table
--condition <max-age> Conditinal check value of max age on updating "age" field in the table
-                     Defaults to 0 (No Conditional Check); Must be more than 0
--c connections       Number of parallel simultaneous DynamoDB session
-                     Defaults to 1; Must be more than 0
--n num-calls         Run for exactly this number of calls by each DynamoDB session
-                     Defaults to 1; Must be more than 0
--r retry-num         Number fo Retry in each message send
-                     Default to 1; Must be more than 0
--endpoint-url <url>  DynamoDB Endpoint URL to send the API request to.
-                     Defaults to "", which mean the AWS SDK automatically determines the URL
-                     For example, give "http://localhost:8000" if it's local dynamodb with exposed port 8000
--verbose             Verbose option
--h                   help message
+-a <action>            (Required) An action to execute
+                       Defaults to "read"; Must be either "read" or "write"
+-table <table>         (Required) DynamoDB table name
+-id <id>               (Required) id field value in the table
+-condition <max-age>   Conditinal check value of max age on updating "age" field in the table
+					   Defaults to 0 (No Conditional Check); Must be more than 0
+-transaction <max-ver> Transaction write value of max ver on updating "ver" field in the table
+                       Defaults to 0 (No Transaction Write); Must be more than 0
+-c connections         Number of parallel simultaneous Kinesis session
+                       Defaults to 1; Must be more than 0
+-n num-calls           Run for exactly this number of calls by each Kinesis session
+                       Defaults to 1; Must be more than 0
+-r retry-num           Number fo Retry in each message send
+                       Default to 1; Must be more than 0
+-endpoint-url <url>    DynamoDB Endpoint URL to send the API request to.
+                       Defaults to "", which mean the AWS SDK automatically determines the URL
+                       For example, give "http://localhost:8000" if it's local dynamodb with exposed port 8000
+-verbose               Verbose option
+-h                     help message
 `
 
 type DynamoDBBenchmark struct {
@@ -92,33 +94,37 @@ func getDynamoDBClient(endpointUrl string) *dynamodb.DynamoDB {
 func (c *DynamoDBBenchmark) Run() {
 	successCount := uint32(0)
 	errorCount := uint32(0)
+	successGetCount := uint32(0)
+	errorGetCount := uint32(0)
 	startTime := time.Now()
 
 	var wg sync.WaitGroup
 	for i := 1; i <= c.Connections; i++ {
 		wg.Add(1)
 		if c.Action == "read" {
-			go c.startReadWorker(i, &wg, &successCount, &errorCount)
+			go c.startReadWorker(i, &wg, &successCount, &errorCount, &successGetCount, &errorGetCount)
 		} else {
-			go c.startWriteWorker(i, &wg, &successCount, &errorCount)
+			go c.startWriteWorker(i, &wg, &successCount, &errorCount, &successGetCount, &errorGetCount)
 		}
 	}
 	wg.Wait()
 
 	duration := time.Since(startTime).Seconds()
 	duration_ms := time.Since(startTime).Milliseconds()
-	average_ms := duration_ms / (int64(successCount) + int64(errorCount))
+	average_ms := duration_ms / (int64(successCount) + int64(errorCount) + int64(successGetCount) + int64(errorGetCount))
 
 	fmt.Println("-----------------------")
 	fmt.Printf("DynamoDB Benchmark Summary - %s\n", c.Action)
 	fmt.Println("-----------------------")
 	fmt.Printf("Sent messages: %v\n", successCount)
 	fmt.Printf("Errors: %v\n", errorCount)
+	fmt.Printf("(GET)Sent messages: %v\n", successGetCount)
+	fmt.Printf("(GET)Errors: %v\n", errorGetCount)
 	fmt.Printf("Duration (sec): %v\n", duration)
 	fmt.Printf("Average (ms): %v\n", average_ms)
 }
 
-func (c *DynamoDBBenchmark) startWriteWorker(id int, wg *sync.WaitGroup, successCount *uint32, errorCount *uint32) {
+func (c *DynamoDBBenchmark) startWriteWorker(id int, wg *sync.WaitGroup, successCount *uint32, errorCount *uint32, successGetCount *uint32, errorGetCount *uint32) {
 	defer wg.Done()
 
 	db := getDynamoDBClient(c.EndpointUrl)
@@ -133,30 +139,55 @@ func (c *DynamoDBBenchmark) startWriteWorker(id int, wg *sync.WaitGroup, success
 		UpdateExpression: aws.String("set age = age - :age_decrement_value, ver = ver + :ver_increment_value"),
 		ReturnValues:     aws.String("ALL_NEW"),
 	}
-	if c.Condition > 0 {
-		param.ConditionExpression = aws.String("age >= :age_minimum_value")
-		param.ExpressionAttributeValues = map[string]*dynamodb.AttributeValue{
-			":age_decrement_value": {
-				N: aws.String("1"),
+	param2 := &dynamodb.GetItemInput{
+		TableName: &c.TableName,
+		Key: map[string]*dynamodb.AttributeValue{
+			"id": {
+				S: aws.String(c.Id),
 			},
-			":ver_increment_value": {
-				N: aws.String("1"),
-			},
-			":age_minimum_value": {
-				N: aws.String(strconv.Itoa(c.Condition)),
-			},
-		}
-	} else {
-		param.ExpressionAttributeValues = map[string]*dynamodb.AttributeValue{
-			":age_decrement_value": {
-				N: aws.String("1"),
-			},
-		}
+		},
 	}
 	for i := 1; i <= c.NumCalls; i++ {
-		//if c.Verbose {
-		//	fmt.Printf("[Verbose] Mssage: PartitionKey %s Data %s\n", c.PartitionKey, message)
-		//}
+		err2 := retry(c.RetryNum, 2*time.Second, func() (err2 error) {
+			dresp, derr := db.GetItem(param2)
+			item := Item{}
+			derr = dynamodbattribute.UnmarshalMap(dresp.Item, &item)
+			// fmt.Printf("[Verbose] DynamoDB GetImte Response: id %s age %d ver %d\n", item.Id, item.Age, item.Ver)
+			param.ConditionExpression = aws.String("ver = :ver_value AND age >= :age_minimum_value")
+			param.ExpressionAttributeValues = map[string]*dynamodb.AttributeValue{
+				":age_decrement_value": {
+					N: aws.String("1"),
+				},
+				":ver_increment_value": {
+					N: aws.String("1"),
+				},
+				":ver_value": {
+					N: aws.String(strconv.FormatInt(item.Ver, 10)),
+				},
+				":age_minimum_value": {
+					N: aws.String(strconv.Itoa(c.Condition)),
+				},
+			}
+			if c.Verbose {
+				if derr != nil {
+					fmt.Printf("Got error unmarshalling: %s", derr)
+					return derr
+				}
+				fmt.Printf("[Verbose] DynamoDB GetItem Response: id %s age %d ver %d\n", item.Id, item.Age, item.Ver)
+			}
+			return derr
+			return derr
+		})
+
+		if err2 != nil {
+			fmt.Printf("Error: %v\n", err2)
+			atomic.AddUint32(errorGetCount, 1)
+			continue
+		}
+
+		atomic.AddUint32(successGetCount, 1)
+
+
 		err := retry(c.RetryNum, 2*time.Second, func() (err error) {
 			dresp, derr := db.UpdateItem(param)
 			if c.Verbose {
@@ -166,7 +197,7 @@ func (c *DynamoDBBenchmark) startWriteWorker(id int, wg *sync.WaitGroup, success
 					fmt.Printf("Got error unmarshalling: %s", derr)
 					return derr
 				}
-				fmt.Printf("[Verbose] DynamoDB UpdateImte Response: id %s age %d ver %d\n", item.Id, item.Age, item.Ver)
+				fmt.Printf("[Verbose] DynamoDB UpdateItem Response: id %s age %d ver %d\n", item.Id, item.Age, item.Ver)
 			}
 			return derr
 		})
@@ -181,7 +212,7 @@ func (c *DynamoDBBenchmark) startWriteWorker(id int, wg *sync.WaitGroup, success
 	}
 }
 
-func (c *DynamoDBBenchmark) startReadWorker(id int, wg *sync.WaitGroup, successCount *uint32, errorCount *uint32) {
+func (c *DynamoDBBenchmark) startReadWorker(id int, wg *sync.WaitGroup, successCount *uint32, errorCount *uint32, successGetCount *uint32, errorGetCount *uint32) {
 	defer wg.Done()
 
 	db := getDynamoDBClient(c.EndpointUrl)
