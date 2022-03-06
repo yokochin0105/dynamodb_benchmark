@@ -171,14 +171,13 @@ func (c *DynamoDBBenchmark) startWriteWorker(id int, wg *sync.WaitGroup, success
 					fmt.Printf("Got error unmarshalling: %s", derr)
 					return derr
 				}
-				fmt.Printf("[Verbose] DynamoDB GetItem Response: id %s age %d ver %d\n", item.Id, item.Age, item.Ver)
+				// fmt.Printf("[Verbose] DynamoDB GetItem Response: id %s age %d ver %d\n", item.Id, item.Age, item.Ver)
 			}
-			return derr
 			return derr
 		})
 
 		if err2 != nil {
-			fmt.Printf("Error: %v\n", err2)
+			// fmt.Printf("Error: %v\n", err2)
 			atomic.AddUint32(errorGetCount, 1)
 			continue
 		}
@@ -195,13 +194,16 @@ func (c *DynamoDBBenchmark) startWriteWorker(id int, wg *sync.WaitGroup, success
 					fmt.Printf("Got error unmarshalling: %s", derr)
 					return derr
 				}
-				fmt.Printf("[Verbose] DynamoDB UpdateItem Response: id %s age %d ver %d\n", item.Id, item.Age, item.Ver)
+				nowTime := time.Now()
+				const MilliFormat = "2006/01/02 15:04:05.000"
+				fmt.Printf( "[timestamp] %s [Verbose] DynamoDB UpdateItem Response: id %s age %d ver %d\n", nowTime.Format(MilliFormat), item.Id, item.Age, item.Ver)
+
 			}
 			return derr
 		})
 
 		if err != nil {
-			fmt.Printf("Error: %v\n", err)
+			// fmt.Printf("Error: %v\n", err)
 			atomic.AddUint32(errorCount, 1)
 			continue
 		}
