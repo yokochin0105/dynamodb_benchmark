@@ -24,7 +24,7 @@ var usageText = `auto_increment [options...]
 
 Options:
 -a <action>          (Required) An action to execute
-                     Defaults to "read"; Must be either "read" or "write"
+                     Defaults to "read"; Must be either "read" or "write-condition" or "write-condition-with-get"
 -table <table>       (Required) DynamoDB table name
 -id <id>             (Required) id field value in the table
 -condition <max-age> Conditinal check value of max age on updating "age" field in the table
@@ -101,8 +101,10 @@ func (c *DynamoDBBenchmark) Run() {
 		wg.Add(1)
 		if c.Action == "read" {
 			go c.startReadWorker(i, &wg, &successCount, &errorCount, &successGetCount, &errorGetCount)
+		} else if c.Action == "write-condition"{
+			go c.startWriteWorker(i, &wg, &successCount, &errorCount)
 		} else {
-			go c.startWriteWorker(i, &wg, &successCount, &errorCount, &successGetCount, &errorGetCount)
+			go c.startWriteWorkerCondition(i, &wg, &successCount, &errorCount, &successGetCount, &errorGetCount)
 		}
 	}
 	wg.Wait()
@@ -122,7 +124,7 @@ func (c *DynamoDBBenchmark) Run() {
 	fmt.Printf("Average (ms): %v\n", average_ms)
 }
 
-func (c *DynamoDBBenchmark) startWriteWorker(id int, wg *sync.WaitGroup, successCount *uint32, errorCount *uint32, successGetCount *uint32, errorGetCount *uint32) {
+func (c *DynamoDBBenchmark) startWriteWorkerCondition(id int, wg *sync.WaitGroup, successCount *uint32, errorCount *uint32, successGetCount *uint32, errorGetCount *uint32) {
 	defer wg.Done()
 
 	db := getDynamoDBClient(c.EndpointUrl)
@@ -236,6 +238,63 @@ func (c *DynamoDBBenchmark) startReadWorker(id int, wg *sync.WaitGroup, successC
 					return derr
 				}
 				fmt.Printf("[Verbose] DynamoDB GetImte Response: id %s age %d\n", item.Id, item.Age)
+			}
+			return derr
+		})
+
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			atomic.AddUint32(errorCount, 1)
+			continue
+		}
+
+		atomic.AddUint32(successCount, 1)
+	}
+}
+
+func (c *DynamoDBBenchmark) startWriteWorker(id int, wg *sync.WaitGroup, successCount *uint32, errorCount *uint32) {
+	defer wg.Done()
+
+	db := getDynamoDBClient(c.EndpointUrl)
+
+	param := &dynamodb.UpdateItemInput{
+		TableName: &c.TableName,
+		Key: map[string]*dynamodb.AttributeValue{
+			"id": {
+				S: aws.String(c.Id),
+			},
+		},
+		UpdateExpression: aws.String("set age = age - :age_decrement_value, ver = ver + :ver_increment_value"),
+		ReturnValues:     aws.String("ALL_NEW"),
+	}
+	param.ConditionExpression = aws.String("age >= :age_minimum_value")
+	param.ExpressionAttributeValues = map[string]*dynamodb.AttributeValue{
+		":age_decrement_value": {
+			N: aws.String("1"),
+		},
+		":ver_increment_value": {
+			N: aws.String("1"),
+		},
+		":age_minimum_value": {
+			N: aws.String(strconv.Itoa(c.Condition)),
+		},
+	}
+	for i := 1; i <= c.NumCalls; i++ {
+		//if c.Verbose {
+		//	fmt.Printf("[Verbose] Mssage: PartitionKey %s Data %s\n", c.PartitionKey, message)
+		//}
+		err := retry(c.RetryNum, 2*time.Second, func() (err error) {
+			dresp, derr := db.UpdateItem(param)
+			if c.Verbose {
+				item := Item{}
+				derr := dynamodbattribute.UnmarshalMap(dresp.Attributes, &item)
+				if derr != nil {
+					fmt.Printf("Got error unmarshalling: %s", derr)
+					return derr
+				}
+				nowTime := time.Now()
+				const MilliFormat = "2006/01/02 15:04:05.000"
+				fmt.Printf( "[timestamp] %s [Verbose] DynamoDB UpdateItem Response: id %s age %d ver %d\n", nowTime.Format(MilliFormat), item.Id, item.Age, item.Ver)
 			}
 			return derr
 		})
