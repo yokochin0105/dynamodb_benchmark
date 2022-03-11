@@ -88,7 +88,7 @@ func CreateItem(db dynamodbiface.DynamoDBAPI, tableName *string, id *string) err
 
 	item := Item{
 		Id:  *id,
-		Age: 100000,
+		Age: 200,
 		Ver: 0,
 	}
 	av, err := dynamodbattribute.MarshalMap(item)

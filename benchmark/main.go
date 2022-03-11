@@ -108,22 +108,29 @@ func (c *DynamoDBBenchmark) Run() {
 	errorGetCount := uint32(0)
 	startTime := time.Now()
 
+	var lastSuccessedTimeNanoUnix int64
+
 	var wg sync.WaitGroup
 	for i := 1; i <= c.Connections; i++ {
 		wg.Add(1)
 		if c.Action == "read" {
 			go c.startReadWorker(i, &wg, &successCount, &errorCount, &successGetCount, &errorGetCount)
 		} else if c.Action == "write-condition"{
-			go c.startWriteWorker(i, &wg, &successCount, &errorCount)
+			go c.startWriteWorker(i, &wg, &successCount, &errorCount, &lastSuccessedTimeNanoUnix)
 		} else if c.Action == "write-transaction"{
-			go c.startWriteWorkerTransaction(i, &wg, &successCount, &errorCount)
+			go c.startWriteWorkerTransaction(i, &wg, &successCount, &errorCount, &lastSuccessedTimeNanoUnix)
 		} else {
-			go c.startWriteWorkerCondition(i, &wg, &successCount, &errorCount, &successGetCount, &errorGetCount)
+			go c.startWriteWorkerCondition(i, &wg, &successCount, &errorCount, &successGetCount, &errorGetCount, &lastSuccessedTimeNanoUnix)
 		}
 	}
 	wg.Wait()
 
+	if lastSuccessedTimeNanoUnix == 0 {
+		lastSuccessedTimeNanoUnix  = time.Now().UnixNano()
+	}
+    lastSuccessedTime := time.Unix(lastSuccessedTimeNanoUnix/1000000000, lastSuccessedTimeNanoUnix%1000000000)
 	duration := time.Since(startTime).Seconds()
+	lastSuccessed_duration := lastSuccessedTime.Sub(startTime).Seconds()
 	duration_ms := time.Since(startTime).Milliseconds()
 	average_ms := duration_ms / (int64(successCount) + int64(errorCount) + int64(successGetCount) + int64(errorGetCount))
 
@@ -136,9 +143,10 @@ func (c *DynamoDBBenchmark) Run() {
 	fmt.Printf("(GET)Errors: %v\n", errorGetCount)
 	fmt.Printf("Duration (sec): %v\n", duration)
 	fmt.Printf("Average (ms): %v\n", average_ms)
+	fmt.Printf("Last Succeed Duration (sec): %v\n", lastSuccessed_duration)
 }
 
-func (c *DynamoDBBenchmark) startWriteWorkerCondition(id int, wg *sync.WaitGroup, successCount *uint32, errorCount *uint32, successGetCount *uint32, errorGetCount *uint32) {
+func (c *DynamoDBBenchmark) startWriteWorkerCondition(id int, wg *sync.WaitGroup, successCount *uint32, errorCount *uint32, successGetCount *uint32, errorGetCount *uint32, lastSuccessedTimeNanoUnix *int64) {
 	defer wg.Done()
 
 	db := getDynamoDBClient(c.EndpointUrl)
@@ -225,17 +233,18 @@ func (c *DynamoDBBenchmark) startWriteWorkerCondition(id int, wg *sync.WaitGroup
 		}
 
 		atomic.AddUint32(successCount, 1)
+		atomic.StoreInt64(lastSuccessedTimeNanoUnix, time.Now().UnixNano())
 	}
 }
 
-func (c *DynamoDBBenchmark) startWriteWorkerTransaction(id int, wg *sync.WaitGroup, successCount *uint32, errorCount *uint32) {
+func (c *DynamoDBBenchmark) startWriteWorkerTransaction(id int, wg *sync.WaitGroup, successCount *uint32, errorCount *uint32, lastSuccessedTimeNanoUnix *int64) {
 	defer wg.Done()
 
 	db := getDynamoDBClient(c.EndpointUrl)
 
 	twii := func(i int) *dynamodb.TransactWriteItemsInput {
 		clientRequestToken := strconv.FormatInt(unixTime, 10) + "_" + strconv.Itoa(id) + "_" + strconv.Itoa(i) + "_" + RandomString(10)
-		fmt.Printf("%s\n" ,clientRequestToken)
+		// fmt.Printf("%s\n" ,clientRequestToken)
 		return &dynamodb.TransactWriteItemsInput{
 			TransactItems: []*dynamodb.TransactWriteItem{
 				&dynamodb.TransactWriteItem{
@@ -299,6 +308,7 @@ func (c *DynamoDBBenchmark) startWriteWorkerTransaction(id int, wg *sync.WaitGro
 		}
 
 		atomic.AddUint32(successCount, 1)
+		atomic.StoreInt64(lastSuccessedTimeNanoUnix, time.Now().UnixNano())
 	}
 }
 
@@ -340,7 +350,7 @@ func (c *DynamoDBBenchmark) startReadWorker(id int, wg *sync.WaitGroup, successC
 	}
 }
 
-func (c *DynamoDBBenchmark) startWriteWorker(id int, wg *sync.WaitGroup, successCount *uint32, errorCount *uint32) {
+func (c *DynamoDBBenchmark) startWriteWorker(id int, wg *sync.WaitGroup, successCount *uint32, errorCount *uint32, lastSuccessedTimeNanoUnix *int64) {
 	defer wg.Done()
 
 	db := getDynamoDBClient(c.EndpointUrl)
@@ -394,6 +404,7 @@ func (c *DynamoDBBenchmark) startWriteWorker(id int, wg *sync.WaitGroup, success
 		}
 
 		atomic.AddUint32(successCount, 1)
+		atomic.StoreInt64(lastSuccessedTimeNanoUnix, time.Now().UnixNano())
 	}
 }
 
