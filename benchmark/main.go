@@ -235,7 +235,7 @@ func (c *DynamoDBBenchmark) startWriteWorkerTransaction(id int, wg *sync.WaitGro
 
 	twii := func(i int) *dynamodb.TransactWriteItemsInput {
 		clientRequestToken := strconv.FormatInt(unixTime, 10) + "_" + strconv.Itoa(id) + "_" + strconv.Itoa(i) + "_" + RandomString(10)
-		// fmt.Printf("%s\n" ,clientRequestToken)
+		fmt.Printf("%s\n" ,clientRequestToken)
 		return &dynamodb.TransactWriteItemsInput{
 			TransactItems: []*dynamodb.TransactWriteItem{
 				&dynamodb.TransactWriteItem{
