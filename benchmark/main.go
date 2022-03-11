@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"math/rand"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -24,7 +25,7 @@ var usageText = `auto_increment [options...]
 
 Options:
 -a <action>          (Required) An action to execute
-                     Defaults to "read"; Must be either "read" or "write"
+                     Defaults to "read"; Must be either "read" or "write-condition" or "write-condition-with-get" or "write-transaction"
 -table <table>       (Required) DynamoDB table name
 -id <id>             (Required) id field value in the table
 -condition <max-age> Conditinal check value of max age on updating "age" field in the table
@@ -42,6 +43,8 @@ Options:
 -h                   help message
 `
 
+var unixTime = time.Now().Unix()
+
 type DynamoDBBenchmark struct {
 	Action      string
 	TableName   string
@@ -57,6 +60,7 @@ type DynamoDBBenchmark struct {
 type Item struct {
 	Id  string `json:"id"`
 	Age int64  `json:"age"`
+	Ver int64  `json:"ver"`
 }
 
 func retry(attempts int, sleep time.Duration, f func() error) (err error) {
@@ -88,36 +92,53 @@ func getDynamoDBClient(endpointUrl string) *dynamodb.DynamoDB {
 	}
 }
 
+func RandomString(n int) string {
+    var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+    s := make([]rune, n)
+    for i := range s {
+        s[i] = letters[rand.Intn(len(letters))]
+    }
+    return string(s)
+}
+
 func (c *DynamoDBBenchmark) Run() {
 	successCount := uint32(0)
 	errorCount := uint32(0)
+	successGetCount := uint32(0)
+	errorGetCount := uint32(0)
 	startTime := time.Now()
 
 	var wg sync.WaitGroup
 	for i := 1; i <= c.Connections; i++ {
 		wg.Add(1)
 		if c.Action == "read" {
-			go c.startReadWorker(i, &wg, &successCount, &errorCount)
-		} else {
+			go c.startReadWorker(i, &wg, &successCount, &errorCount, &successGetCount, &errorGetCount)
+		} else if c.Action == "write-condition"{
 			go c.startWriteWorker(i, &wg, &successCount, &errorCount)
+		} else if c.Action == "write-transaction"{
+			go c.startWriteWorkerTransaction(i, &wg, &successCount, &errorCount)
+		} else {
+			go c.startWriteWorkerCondition(i, &wg, &successCount, &errorCount, &successGetCount, &errorGetCount)
 		}
 	}
 	wg.Wait()
 
 	duration := time.Since(startTime).Seconds()
 	duration_ms := time.Since(startTime).Milliseconds()
-	average_ms := duration_ms / (int64(successCount) + int64(errorCount))
+	average_ms := duration_ms / (int64(successCount) + int64(errorCount) + int64(successGetCount) + int64(errorGetCount))
 
 	fmt.Println("-----------------------")
 	fmt.Printf("DynamoDB Benchmark Summary - %s\n", c.Action)
 	fmt.Println("-----------------------")
 	fmt.Printf("Sent messages: %v\n", successCount)
 	fmt.Printf("Errors: %v\n", errorCount)
+	fmt.Printf("(GET)Sent messages: %v\n", successGetCount)
+	fmt.Printf("(GET)Errors: %v\n", errorGetCount)
 	fmt.Printf("Duration (sec): %v\n", duration)
 	fmt.Printf("Average (ms): %v\n", average_ms)
 }
 
-func (c *DynamoDBBenchmark) startWriteWorker(id int, wg *sync.WaitGroup, successCount *uint32, errorCount *uint32) {
+func (c *DynamoDBBenchmark) startWriteWorkerCondition(id int, wg *sync.WaitGroup, successCount *uint32, errorCount *uint32, successGetCount *uint32, errorGetCount *uint32) {
 	defer wg.Done()
 
 	db := getDynamoDBClient(c.EndpointUrl)
@@ -129,27 +150,57 @@ func (c *DynamoDBBenchmark) startWriteWorker(id int, wg *sync.WaitGroup, success
 				S: aws.String(c.Id),
 			},
 		},
-		UpdateExpression: aws.String("set age = age + :age_increment_value"),
+		UpdateExpression: aws.String("set age = age - :age_decrement_value, ver = ver + :ver_increment_value"),
 		ReturnValues:     aws.String("ALL_NEW"),
 	}
-	if c.Condition > 0 {
-		param.ConditionExpression = aws.String("age < :age_max_value")
-		param.ExpressionAttributeValues = map[string]*dynamodb.AttributeValue{
-			":age_increment_value": {
-				N: aws.String("1"),
+	param2 := &dynamodb.GetItemInput{
+		TableName: &c.TableName,
+		Key: map[string]*dynamodb.AttributeValue{
+			"id": {
+				S: aws.String(c.Id),
 			},
-			":age_max_value": {
-				N: aws.String(strconv.Itoa(c.Condition)),
-			},
-		}
-	} else {
-		param.ExpressionAttributeValues = map[string]*dynamodb.AttributeValue{
-			":age_increment_value": {
-				N: aws.String("1"),
-			},
-		}
+		},
 	}
 	for i := 1; i <= c.NumCalls; i++ {
+		err2 := retry(c.RetryNum, 2*time.Second, func() (err2 error) {
+			dresp, derr := db.GetItem(param2)
+			item := Item{}
+			derr = dynamodbattribute.UnmarshalMap(dresp.Item, &item)
+			// fmt.Printf("[Verbose] DynamoDB GetImte Response: id %s age %d ver %d\n", item.Id, item.Age, item.Ver)
+			param.ConditionExpression = aws.String("ver = :ver_value AND age >= :age_minimum_value")
+			param.ExpressionAttributeValues = map[string]*dynamodb.AttributeValue{
+				":age_decrement_value": {
+					N: aws.String("1"),
+				},
+				":ver_increment_value": {
+					N: aws.String("1"),
+				},
+				":ver_value": {
+					N: aws.String(strconv.FormatInt(item.Ver, 10)),
+				},
+				":age_minimum_value": {
+					N: aws.String(strconv.Itoa(c.Condition)),
+				},
+			}
+			if c.Verbose {
+				if derr != nil {
+					fmt.Printf("Got error unmarshalling: %s", derr)
+					return derr
+				}
+				// fmt.Printf("[Verbose] DynamoDB GetItem Response: id %s age %d ver %d\n", item.Id, item.Age, item.Ver)
+			}
+			return derr
+		})
+
+		if err2 != nil {
+			// fmt.Printf("Error: %v\n", err2)
+			atomic.AddUint32(errorGetCount, 1)
+			continue
+		}
+
+		atomic.AddUint32(successGetCount, 1)
+
+
 		err := retry(c.RetryNum, 2*time.Second, func() (err error) {
 			dresp, derr := db.UpdateItem(param)
 			if c.Verbose {
@@ -159,13 +210,16 @@ func (c *DynamoDBBenchmark) startWriteWorker(id int, wg *sync.WaitGroup, success
 					fmt.Printf("Got error unmarshalling: %s", derr)
 					return derr
 				}
-				fmt.Printf("[Verbose] DynamoDB UpdateImte Response: id %s age %d\n", item.Id, item.Age)
+				nowTime := time.Now()
+				const MilliFormat = "2006/01/02 15:04:05.000"
+				fmt.Printf( "[timestamp] %s [Verbose] DynamoDB UpdateItem Response: id %s age %d ver %d\n", nowTime.Format(MilliFormat), item.Id, item.Age, item.Ver)
+
 			}
 			return derr
 		})
 
 		if err != nil {
-			fmt.Printf("Error: %v\n", err)
+			// fmt.Printf("Error: %v\n", err)
 			atomic.AddUint32(errorCount, 1)
 			continue
 		}
@@ -174,7 +228,81 @@ func (c *DynamoDBBenchmark) startWriteWorker(id int, wg *sync.WaitGroup, success
 	}
 }
 
-func (c *DynamoDBBenchmark) startReadWorker(id int, wg *sync.WaitGroup, successCount *uint32, errorCount *uint32) {
+func (c *DynamoDBBenchmark) startWriteWorkerTransaction(id int, wg *sync.WaitGroup, successCount *uint32, errorCount *uint32) {
+	defer wg.Done()
+
+	db := getDynamoDBClient(c.EndpointUrl)
+
+	twii := func(i int) *dynamodb.TransactWriteItemsInput {
+		clientRequestToken := strconv.FormatInt(unixTime, 10) + "_" + strconv.Itoa(id) + "_" + strconv.Itoa(i) + "_" + RandomString(10)
+		// fmt.Printf("%s\n" ,clientRequestToken)
+		return &dynamodb.TransactWriteItemsInput{
+			TransactItems: []*dynamodb.TransactWriteItem{
+				&dynamodb.TransactWriteItem{
+					Update: &dynamodb.Update{
+						TableName: &c.TableName,
+						Key: map[string]*dynamodb.AttributeValue{
+							"id": {
+								S: aws.String(c.Id),
+							},
+						},
+						UpdateExpression: aws.String("set age = age - :age_decrement_value, ver = ver + :ver_increment_value"),
+
+						// ReturnValues:     aws.String("ALL_NEW"),
+						ConditionExpression: aws.String("age > :age_min_value"),
+						ExpressionAttributeValues: map[string]*dynamodb.AttributeValue{
+							":age_decrement_value": {
+								N: aws.String("1"),
+							},
+							":ver_increment_value": {
+								N: aws.String("1"),
+							},
+							":age_min_value": {
+								N: aws.String("0"),
+							},
+							// ":age_max_value": {
+							// 	N: aws.String(strconv.Itoa(c.Condition)),
+							// },
+						},
+					},
+				},
+			},
+			ClientRequestToken: aws.String(clientRequestToken),
+		}
+	}
+	for i := 1; i <= c.NumCalls; i++ {
+		//if c.Verbose {
+		//	fmt.Printf("[Verbose] Mssage: PartitionKey %s Data %s\n", c.PartitionKey, message)
+		//}
+		err := retry(c.RetryNum, 2*time.Second, func() (err error) {
+			_, derr := db.TransactWriteItems(twii(i))
+			if c.Verbose {
+				item := Item{}
+				// UpdateItemInput -> Updateに変えたことで取得できなくなっている部分を一旦コメントアウト
+				// derr := dynamodbattribute.UnmarshalMap(dresp.Attributes, &item)
+				if derr != nil {
+				// 	fmt.Printf("Got error unmarshalling: %s", derr)
+					return derr
+				}
+				fmt.Printf("[Verbose] DynamoDB UpdateImte Response: id %s age %d %v\n", item.Id, item.Age, time.Now())
+			}
+			return derr
+		})
+
+		if err != nil {
+			// 在庫0件になってからのconditional error は表示しない
+			// if !strings.Contains(err.Error(), "The conditional request failed") {
+				fmt.Printf("Error: %v\n", err)
+			// }
+			atomic.AddUint32(errorCount, 1)
+			continue
+		}
+
+		atomic.AddUint32(successCount, 1)
+	}
+}
+
+func (c *DynamoDBBenchmark) startReadWorker(id int, wg *sync.WaitGroup, successCount *uint32, errorCount *uint32, successGetCount *uint32, errorGetCount *uint32) {
 	defer wg.Done()
 
 	db := getDynamoDBClient(c.EndpointUrl)
@@ -212,6 +340,63 @@ func (c *DynamoDBBenchmark) startReadWorker(id int, wg *sync.WaitGroup, successC
 	}
 }
 
+func (c *DynamoDBBenchmark) startWriteWorker(id int, wg *sync.WaitGroup, successCount *uint32, errorCount *uint32) {
+	defer wg.Done()
+
+	db := getDynamoDBClient(c.EndpointUrl)
+
+	param := &dynamodb.UpdateItemInput{
+		TableName: &c.TableName,
+		Key: map[string]*dynamodb.AttributeValue{
+			"id": {
+				S: aws.String(c.Id),
+			},
+		},
+		UpdateExpression: aws.String("set age = age - :age_decrement_value, ver = ver + :ver_increment_value"),
+		ReturnValues:     aws.String("ALL_NEW"),
+	}
+	param.ConditionExpression = aws.String("age >= :age_minimum_value")
+	param.ExpressionAttributeValues = map[string]*dynamodb.AttributeValue{
+		":age_decrement_value": {
+			N: aws.String("1"),
+		},
+		":ver_increment_value": {
+			N: aws.String("1"),
+		},
+		":age_minimum_value": {
+			N: aws.String(strconv.Itoa(c.Condition)),
+		},
+	}
+	for i := 1; i <= c.NumCalls; i++ {
+		//if c.Verbose {
+		//	fmt.Printf("[Verbose] Mssage: PartitionKey %s Data %s\n", c.PartitionKey, message)
+		//}
+		err := retry(c.RetryNum, 2*time.Second, func() (err error) {
+			dresp, derr := db.UpdateItem(param)
+			if c.Verbose {
+				item := Item{}
+				derr := dynamodbattribute.UnmarshalMap(dresp.Attributes, &item)
+				if derr != nil {
+					fmt.Printf("Got error unmarshalling: %s", derr)
+					return derr
+				}
+				nowTime := time.Now()
+				const MilliFormat = "2006/01/02 15:04:05.000"
+				fmt.Printf( "[timestamp] %s [Verbose] DynamoDB UpdateItem Response: id %s age %d ver %d\n", nowTime.Format(MilliFormat), item.Id, item.Age, item.Ver)
+			}
+			return derr
+		})
+
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			atomic.AddUint32(errorCount, 1)
+			continue
+		}
+
+		atomic.AddUint32(successCount, 1)
+	}
+}
+
 func main() {
 
 	var (
@@ -231,14 +416,14 @@ func main() {
 	flag.StringVar(&endpointUrl, "endpoint-url", "", "The URL to send the API request to")
 	flag.StringVar(&id, "id", "", "(Required) id field value in the table")
 	flag.IntVar(&condition, "condition", 0, "Conditinal check value of max age on updating age field")
-	flag.IntVar(&connections, "c", 1, "Number of parallel simultaneous DynamoDB session")
-	flag.IntVar(&numCalls, "n", 1, "Run for exactly this number of calls by each DynamoDB session")
+	flag.IntVar(&connections, "c", 1, "Number of parallel simultaneous Kinesis session")
+	flag.IntVar(&numCalls, "n", 1, "Run for exactly this number of calls by each Kinesis session")
 	flag.IntVar(&retryNum, "r", 1, "Number fo Retry in each message send")
 	flag.BoolVar(&verbose, "verbose", false, "Verbose option")
 	flag.Usage = usage
 	flag.Parse()
 
-	if action != "read" && action != "write" {
+	if action != "read" && action != "writ-condition" && action != "write-transaction" && action != "write-condition-with-get" {
 		fmt.Println("[ERROR] Invalid Command Options (-a)! action value must either read or write")
 	}
 	if tableName == "" || id == "" {
