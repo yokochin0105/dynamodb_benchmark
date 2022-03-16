@@ -8,7 +8,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"math/rand"
+    "crypto/rand"
+    "encoding/base32"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -92,13 +93,13 @@ func getDynamoDBClient(endpointUrl string) *dynamodb.DynamoDB {
 	}
 }
 
-func RandomString(n int) string {
-    var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
-    s := make([]rune, n)
-    for i := range s {
-        s[i] = letters[rand.Intn(len(letters))]
+func getToken(length int) string {
+    randomBytes := make([]byte, 32)
+    _, err := rand.Read(randomBytes)
+    if err != nil {
+        panic(err)
     }
-    return string(s)
+    return base32.StdEncoding.EncodeToString(randomBytes)[:length]
 }
 
 func (c *DynamoDBBenchmark) Run() {
@@ -243,8 +244,8 @@ func (c *DynamoDBBenchmark) startWriteWorkerTransaction(id int, wg *sync.WaitGro
 	db := getDynamoDBClient(c.EndpointUrl)
 
 	twii := func(i int) *dynamodb.TransactWriteItemsInput {
-		clientRequestToken := strconv.FormatInt(unixTime, 10) + "_" + strconv.Itoa(id) + "_" + strconv.Itoa(i) + "_" + RandomString(10)
-		// fmt.Printf("%s\n" ,clientRequestToken)
+		clientRequestToken := strconv.FormatInt(unixTime, 10) + "_" + strconv.Itoa(id) + "_" + strconv.Itoa(i) + "_" + getToken(10)
+		fmt.Printf("%s\n" ,clientRequestToken)
 		return &dynamodb.TransactWriteItemsInput{
 			TransactItems: []*dynamodb.TransactWriteItem{
 				&dynamodb.TransactWriteItem{
